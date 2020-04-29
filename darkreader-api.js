@@ -2080,7 +2080,8 @@
             !element.classList.contains('darkreader') &&
             element.media !== 'print' &&
             !element.classList.contains('stylus') &&
-            element.id.substr(0, 6) !== 'svelte');
+            element.id.substr(0, 6) !== 'svelte' &&
+            !element.hasAttribute('data-styled'));
     }
     var asyncQueue = createAsyncTasksQueue();
     function manageStyle(element, _a) {

@@ -1,5 +1,5 @@
 /**
- * Dark Reader v4.9.4
+ * Dark Reader v4.9.7
  * https://darkreader.org/
  */
 
@@ -305,7 +305,12 @@
             var u_1 = parseURL(b.protocol + "//" + b.host + $relative);
             return u_1.href;
         }
-        var pathParts = b.pathname.split('/').concat($relative.split('/')).filter(function (p) { return p; });
+        var pathParts = b.pathname.split('/');
+        var lastPathPart = pathParts[pathParts.length - 1];
+        if (lastPathPart.match(/\.[a-z]+$/i)) {
+            pathParts.pop();
+        }
+        pathParts = pathParts.concat.apply(pathParts, $relative.split('/')).filter(function (p) { return p; });
         var backwardIndex;
         while ((backwardIndex = pathParts.indexOf('..')) > 0) {
             pathParts.splice(backwardIndex - 1, 2);
@@ -1909,7 +1914,16 @@
             .concat(filterProps.map(function (prop) { return prop + "=\"" + theme[prop] + "\""; }))
             .join(' ');
     }
-    function overrideInlineStyle(element, theme) {
+    function shouldIgnoreInlineStyle(element, selectors) {
+        for (var _i = 0, selectors_1 = selectors; _i < selectors_1.length; _i++) {
+            var ingnoredSelector = selectors_1[_i];
+            if (element.matches(ingnoredSelector)) {
+                return true;
+            }
+        }
+        return false;
+    }
+    function overrideInlineStyle(element, theme, ignoreSelectors) {
         var cacheKey = getInlineStyleCacheKey(element, theme);
         if (cacheKey === inlineStyleCache.get(element)) {
             return;
@@ -1930,6 +1944,16 @@
                 element.setAttribute(dataAttr, '');
             }
             unsetProps.delete(targetCSSProp);
+        }
+        if (ignoreSelectors.length > 0) {
+            if (shouldIgnoreInlineStyle(element, ignoreSelectors)) {
+                unsetProps.forEach(function (cssProp) {
+                    var _a = overrides[cssProp], store = _a.store, dataAttr = _a.dataAttr;
+                    store.delete(element);
+                    element.removeAttribute(dataAttr);
+                });
+                return;
+            }
         }
         if (element.hasAttribute('bgcolor')) {
             var value = element.getAttribute('bgcolor');
@@ -2343,6 +2367,9 @@
                 }
                 syncStylePositionWatcher && syncStylePositionWatcher.stop();
                 insertStyle();
+                if (syncStyle.sheet == null) {
+                    syncStyle.textContent = '';
+                }
                 var sheet = syncStyle.sheet;
                 for (var i = sheet.cssRules.length - 1; i >= 0; i--) {
                     sheet.deleteRule(i);
@@ -2805,24 +2832,23 @@
     }
     function createStaticStyleOverrides() {
         var fallbackStyle = createOrUpdateStyle('darkreader--fallback');
-        document.head.insertBefore(fallbackStyle, document.head.firstChild);
         fallbackStyle.textContent = getModifiedFallbackStyle(filter, { strict: true });
+        document.head.insertBefore(fallbackStyle, document.head.firstChild);
         setupStylePositionWatcher(fallbackStyle, 'fallback');
         var userAgentStyle = createOrUpdateStyle('darkreader--user-agent');
-        document.head.insertBefore(userAgentStyle, fallbackStyle.nextSibling);
         userAgentStyle.textContent = getModifiedUserAgentStyle(filter, isIFrame);
+        document.head.insertBefore(userAgentStyle, fallbackStyle.nextSibling);
         setupStylePositionWatcher(userAgentStyle, 'user-agent');
         var textStyle = createOrUpdateStyle('darkreader--text');
-        document.head.insertBefore(textStyle, fallbackStyle.nextSibling);
         if (filter.useFont || filter.textStroke > 0) {
             textStyle.textContent = createTextStyle(filter);
         }
         else {
             textStyle.textContent = '';
         }
+        document.head.insertBefore(textStyle, fallbackStyle.nextSibling);
         setupStylePositionWatcher(textStyle, 'text');
         var invertStyle = createOrUpdateStyle('darkreader--invert');
-        document.head.insertBefore(invertStyle, textStyle.nextSibling);
         if (fixes && Array.isArray(fixes.invert) && fixes.invert.length > 0) {
             invertStyle.textContent = [
                 fixes.invert.join(', ') + " {",
@@ -2833,21 +2859,22 @@
         else {
             invertStyle.textContent = '';
         }
+        document.head.insertBefore(invertStyle, textStyle.nextSibling);
         setupStylePositionWatcher(invertStyle, 'invert');
         var inlineStyle = createOrUpdateStyle('darkreader--inline');
-        document.head.insertBefore(inlineStyle, invertStyle.nextSibling);
         inlineStyle.textContent = getInlineOverrideStyle();
+        document.head.insertBefore(inlineStyle, invertStyle.nextSibling);
         setupStylePositionWatcher(inlineStyle, 'inline');
         var overrideStyle = createOrUpdateStyle('darkreader--override');
-        document.head.appendChild(overrideStyle);
         overrideStyle.textContent = fixes && fixes.css ? replaceCSSTemplates(fixes.css) : '';
+        document.head.appendChild(overrideStyle);
         setupStylePositionWatcher(overrideStyle, 'override');
     }
     var shadowRootsWithOverrides = new Set();
     function createShadowStaticStyleOverrides(root) {
         var inlineStyle = createOrUpdateStyle('darkreader--inline', root);
-        root.insertBefore(inlineStyle, root.firstChild);
         inlineStyle.textContent = getInlineOverrideStyle();
+        root.insertBefore(inlineStyle, root.firstChild);
         shadowRootsWithOverrides.add(root);
     }
     function replaceCSSTemplates($cssText) {
@@ -2911,7 +2938,7 @@
                 inlineStyleElements.push.apply(inlineStyleElements, Array.from(elements));
             }
         });
-        inlineStyleElements.forEach(function (el) { return overrideInlineStyle(el, filter); });
+        inlineStyleElements.forEach(function (el) { return overrideInlineStyle(el, filter, fixes.ignoreInlineStyle); });
     }
     var loadingStylesCounter = 0;
     var loadingStyles = new Set();
@@ -3047,7 +3074,7 @@
             stylesToRestore.forEach(function (style) { return styleManagers.get(style).restore(); });
         });
         watchForInlineStyles(function (element) {
-            overrideInlineStyle(element, filter);
+            overrideInlineStyle(element, filter, fixes.ignoreInlineStyle);
             if (element === document.documentElement) {
                 var rootVariables = getElementCSSVariables(document.documentElement);
                 if (rootVariables.size > 0) {
@@ -3059,7 +3086,7 @@
             var inlineStyleElements = root.querySelectorAll(INLINE_STYLE_SELECTOR);
             if (inlineStyleElements.length > 0) {
                 createShadowStaticStyleOverrides(root);
-                inlineStyleElements.forEach(function (el) { return overrideInlineStyle(el, filter); });
+                inlineStyleElements.forEach(function (el) { return overrideInlineStyle(el, filter, fixes.ignoreInlineStyle); });
             }
         });
         document.addEventListener('readystatechange', onReadyStateChange);
